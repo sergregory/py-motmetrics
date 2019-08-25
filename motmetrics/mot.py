@@ -10,6 +10,63 @@ import pandas as pd
 from collections import OrderedDict
 from itertools import count
 from motmetrics.lap import linear_sum_assignment
+from enum import Enum
+from typing import Union, Iterable, List, Tuple
+
+
+class Event:
+    class EventType(Enum):
+        RAW = 0,
+        MATCH = 1,
+        SWITCH = 2,
+        MISS = 3,
+        FP = 4
+
+    def __init__(self,
+                 frame_id: int,
+                 event_type: EventType,
+                 gt_index: int,
+                 detection_index: int,
+                 distance: float,
+                 gt_class: Union[int, None] = None,
+                 detection_class: Union[int, None] = None):
+        """Create new frame event
+
+        Params:
+            frame_id {int} : idx of the frame
+            event_type {EventType} : type of event
+            gt_index {int} : index of gt object
+            detection_index {int} : index of hypothesis
+            distance {float} : distance between hypothesis and gt boxes
+            gt_class {int} : action class in gt data
+            detection_class {int} : action class in hypothesis
+
+        Returns:
+            [type] -- [description]
+        """
+        self.frame_id = frame_id
+        self.event_type = event_type
+        self.gt_index = gt_index
+        self.detection_index = detection_index
+        self.distance = distance
+        self.gt_class = gt_class
+        self.detection_class = detection_class
+
+        self._index_attribute_mapping = {
+            0: 'event_type',
+            1: 'gt_index',
+            2: 'detection_index',
+            3: 'distance',
+            4: 'gt_class',
+            5: 'detection_class'
+        }
+
+    def __getitem__(self, index):
+        if self._index_attribute_mapping[index] == 'event_type':
+            return Event.EventType(self.event_type).name
+
+        return getattr(self, self._index_attribute_mapping[index])
+
 
 class MOTAccumulator(object):
     """Manage tracking events.
@@ -55,7 +112,6 @@ class MOTAccumulator(object):
     3. Li, Yuan, Chang Huang, and Ram Nevatia. "Learning to associate: Hybridboosted multi-target tracker for crowded scene." 
     Computer Vision and Pattern Recognition, 2009. CVPR 2009. IEEE Conference on. IEEE, 2009.
     """
-
     def __init__(self, auto_id=False, max_switch_time=float('inf')):
         """Create a MOTAccumulator.
 
@@ -79,7 +135,7 @@ class MOTAccumulator(object):
 
         self.auto_id = auto_id
         self.max_switch_time = max_switch_time
-        self.reset()       
+        self.reset()
 
     def reset(self):
         """Reset the accumulator to empty state."""
@@ -87,12 +143,12 @@ class MOTAccumulator(object):
         self._events = []
         self._indices = []
         #self.events = MOTAccumulator.new_event_dataframe()
-        self.m = {} # Pairings up to current timestamp  
-        self.last_occurrence = {} # Tracks most recent occurance of object
+        self.pairings_history = {}  # Pairings up to current timestamp
+        self.last_occurrence = {}  # Tracks most recent occurance of object
         self.dirty_events = True
         self.cached_events_df = None
 
-    def update(self, oids, hids, dists, frameid=None):
+    def update(self, oids, hids, dists, frameid=None, object_labels=None, detection_labels=None):
         """Updates the accumulator with frame specific objects/detections.
 
         This method generates events based on the following algorithm [1]:
@@ -120,6 +176,10 @@ class MOTAccumulator(object):
         frameId : id
             Unique frame id. Optional when MOTAccumulator.auto_id is specified during
             construction.
+        object_labels: N array
+            Array of object labels (same size as oids)
+        detection_labels: M array
+            Array of hypothesis labels (same size as hids)
 
         Returns
         -------
@@ -131,13 +191,13 @@ class MOTAccumulator(object):
         1. Bernardin, Keni, and Rainer Stiefelhagen. "Evaluating multiple object tracking performance: the CLEAR MOT metrics." 
         EURASIP Journal on Image and Video Processing 2008.1 (2008): 1-10.
         """
-        
+
         self.dirty_events = True
         oids = ma.array(oids, mask=np.zeros(len(oids)))
-        hids = ma.array(hids, mask=np.zeros(len(hids)))  
+        hids = ma.array(hids, mask=np.zeros(len(hids)))
         dists = np.atleast_2d(dists).astype(float).reshape(oids.shape[0], hids.shape[0]).copy()
 
-        if frameid is None:            
+        if frameid is None:
             assert self.auto_id, 'auto-id is not enabled'
             if len(self._indices) > 0:
                 frameid = self._indices[-1][0] + 1
@@ -145,82 +205,146 @@ class MOTAccumulator(object):
                 frameid = 0
         else:
             assert not self.auto_id, 'Cannot provide frame id when auto-id is enabled'
-        
+
         eid = count()
 
         # 0. Record raw events
 
         no = len(oids)
         nh = len(hids)
-        
+
         if no * nh > 0:
             for i in range(no):
                 for j in range(nh):
                     self._indices.append((frameid, next(eid)))
-                    self._events.append(['RAW', oids[i], hids[j], dists[i,j]])
+                    self._events.append(
+                        ['RAW', oids[i], hids[j], dists[i, j], object_labels[i], detection_labels[j]])
+                    # self._events.append(
+                    #     Event(frame_id=frameid,
+                    #           event_type=Event.EventType.RAW,
+                    #           gt_index=oids[i],
+                    #           detection_index=hids[j],
+                    #           distance=dists[i, j],
+                    #           gt_class=object_labels[i],
+                    #           detection_class=detection_labels[j]))
         elif no == 0:
-            for i in range(nh):
+            for j in range(nh):
                 self._indices.append((frameid, next(eid)))
-                self._events.append(['RAW', np.nan, hids[i], np.nan])       
+                self._events.append(['RAW', np.nan, hids[j], np.nan, np.nan, detection_labels[j]])
+                # self._events.append(
+                #     Event(frame_id=frameid,
+                #           event_type=Event.EventType.RAW,
+                #           gt_index=np.nan,
+                #           detection_index=hids[j],
+                #           distance=np.nan,
+                #           gt_class=None,
+                #           detection_class=detection_labels[j]))
         elif nh == 0:
             for i in range(no):
                 self._indices.append((frameid, next(eid)))
-                self._events.append(['RAW', oids[i], np.nan, np.nan])
+                self._events.append(['RAW', oids[i], np.nan, np.nan, object_labels[i], np.nan])
+                # self._events.append(
+                #     Event(frame_id=frameid,
+                #           event_type=Event.EventType.RAW,
+                #           gt_index=oids[i],
+                #           detection_index=np.nan,
+                #           distance=np.nan,
+                #           gt_class=object_labels[i],
+                #           detection_class=None))
 
-        if oids.size * hids.size > 0:    
+        if oids.size * hids.size > 0:
             # 1. Try to re-establish tracks from previous correspondences
             for i in range(oids.shape[0]):
-                if not oids[i] in self.m:
+                if not oids[i] in self.pairings_history:
                     continue
 
-                hprev = self.m[oids[i]]                    
-                j, = np.where(hids==hprev)  
+                hprev = self.pairings_history[oids[i]]
+                j, = np.where(hids == hprev)
                 if j.shape[0] == 0:
                     continue
                 j = j[0]
 
-                if np.isfinite(dists[i,j]):
+                if np.isfinite(dists[i, j]):
                     oids[i] = ma.masked
                     hids[j] = ma.masked
-                    self.m[oids.data[i]] = hids.data[j]
-                    
+                    self.pairings_history[oids.data[i]] = hids.data[j]
+
                     self._indices.append((frameid, next(eid)))
-                    self._events.append(['MATCH', oids.data[i], hids.data[j], dists[i, j]])
+                    self._events.append([
+                        'MATCH', oids.data[i], hids.data[j], dists[i, j], object_labels[i],
+                        detection_labels[j]
+                    ])
+                    # self._events.append(
+                    #     Event(frame_id=frameid,
+                    #           event_type=Event.EventType.MATCH,
+                    #           gt_index=oids.data[i],
+                    #           detection_index=hids.data[j],
+                    #           distance=dists[i, j],
+                    #           gt_class=object_labels[i],
+                    #           detection_class=detection_labels[j]))
 
             # 2. Try to remaining objects/hypotheses
             dists[oids.mask, :] = np.nan
             dists[:, hids.mask] = np.nan
-        
+
             rids, cids = linear_sum_assignment(dists)
 
-            for i, j in zip(rids, cids):                
-                if not np.isfinite(dists[i,j]):
+            for i, j in zip(rids, cids):
+                if not np.isfinite(dists[i, j]):
                     continue
-                
+
                 o = oids[i]
                 h = hids.data[j]
-                is_switch = o in self.m and \
-                            self.m[o] != h and \
+                is_switch = o in self.pairings_history and \
+                            self.pairings_history[o] != h and \
                             abs(frameid - self.last_occurrence[o]) <= self.max_switch_time
-                cat = 'SWITCH' if is_switch else 'MATCH'
+                cat = 'SWITCH' if is_switch else 'MATCH'  #Event.EventType.SWITCH if is_switch else Event.EventType.MATCH
                 self._indices.append((frameid, next(eid)))
-                self._events.append([cat, oids.data[i], hids.data[j], dists[i, j]])
+                self._events.append(
+                    [cat, oids.data[i], hids.data[j], dists[i, j], object_labels[i], detection_labels[j]])
+                # self._events.append(
+                #     Event(frame_id=frameid,
+                #           event_type=cat,
+                #           gt_index=oids.data[i],
+                #           detection_index=hids.data[j],
+                #           distance=dists[i, j],
+                #           gt_class=object_labels[i],
+                #           detection_class=detection_labels[j]))
+
                 oids[i] = ma.masked
                 hids[j] = ma.masked
-                self.m[o] = h
+                self.pairings_history[o] = h
 
         # 3. All remaining objects are missed
-        for o in oids[~oids.mask]:
+        indices_of_remaining_objects = np.argwhere(~oids.mask).flatten().tolist()
+        for i in indices_of_remaining_objects:
             self._indices.append((frameid, next(eid)))
-            self._events.append(['MISS', o, np.nan, np.nan])
-        
+            self._events.append(['MISS', oids.data[i], np.nan, np.nan, object_labels[i], np.nan])
+            # self._events.append(
+            #     Event(frame_id=frameid,
+            #           event_type=Event.EventType.MISS,
+            #           gt_index=oids.data[i],
+            #           detection_index=np.nan,
+            #           distance=np.nan,
+            #           gt_class=object_labels[i],
+            #           detection_class=np.nan))
+
         # 4. All remaining hypotheses are false alarms
-        for h in hids[~hids.mask]:
+        indices_of_remaining_hypothesis = np.argwhere(~hids.mask).flatten().tolist()
+        for j in indices_of_remaining_hypothesis:
             self._indices.append((frameid, next(eid)))
-            self._events.append(['FP', np.nan, h, np.nan])
+            self._events.append(['FP', np.nan, hids.data[j], np.nan, np.nan, detection_labels[j]])
+            # self._events.append(
+            #     Event(frame_id=frameid,
+            #           event_type=Event.EventType.FP,
+            #           gt_index=np.nan,
+            #           detection_index=hids.data[j],
+            #           distance=np.nan,
+            #           gt_class=np.nan,
+            #           detection_class=detection_labels[j]))
 
         # 5. Update occurance state
-        for o in oids.data:            
+        for o in oids.data:
             self.last_occurrence[o] = frameid
 
         return frameid
@@ -231,7 +355,7 @@ class MOTAccumulator(object):
             self.cached_events_df = MOTAccumulator.new_event_dataframe_with_data(self._indices, self._events)
             self.dirty_events = False
         return self.cached_events_df
-    
+
     @property
     def mot_events(self):
         df = self.events
@@ -240,21 +364,24 @@ class MOTAccumulator(object):
     @staticmethod
     def new_event_dataframe():
         """Create a new DataFrame for event tracking."""
-        idx = pd.MultiIndex(levels=[[],[]], labels=[[],[]], names=['FrameId','Event'])
+        idx = pd.MultiIndex(levels=[[], []], labels=[[], []], names=['FrameId', 'Event'])
         cats = pd.Categorical([], categories=['RAW', 'FP', 'MISS', 'SWITCH', 'MATCH'])
         df = pd.DataFrame(
             OrderedDict([
-                ('Type', pd.Series(cats)),          # Type of event. One of FP (false positive), MISS, SWITCH, MATCH
-                ('OId', pd.Series(dtype=object)),      # Object ID or -1 if FP. Using float as missing values will be converted to NaN anyways.
-                ('HId', pd.Series(dtype=object)),      # Hypothesis ID or NaN if MISS. Using float as missing values will be converted to NaN anyways.
-                ('D', pd.Series(dtype=float)),      # Distance or NaN when FP or MISS            
+                ('Type', pd.Series(cats)),  # Type of event. One of FP (false positive), MISS, SWITCH, MATCH
+                ('OId', pd.Series(dtype=object)
+                ),  # Object ID or -1 if FP. Using float as missing values will be converted to NaN anyways.
+                ('HId', pd.Series(dtype=object)
+                ),  # Hypothesis ID or NaN if MISS. Using float as missing values will be converted to NaN anyways.
+                ('D', pd.Series(dtype=float)),  # Distance or NaN when FP or MISS            
+                ('GtClass', pd.Series(dtype=object)),  # groundtruth action class or NaN
+                ('DetClass', pd.Series(dtype=object)),  # detected action class or NaN            
             ]),
-            index=idx
-        )
+            index=idx)
         return df
 
     @staticmethod
-    def new_event_dataframe_with_data(indices, events):
+    def new_event_dataframe_with_data(indices: List[Tuple], events: Iterable[Event]):
         """Create a new DataFrame filled with data.
         
         Params
@@ -268,23 +395,29 @@ class MOTAccumulator(object):
 
         tevents = list(zip(*events))
 
-        raw_type = pd.Categorical(tevents[0], categories=['RAW', 'FP', 'MISS', 'SWITCH', 'MATCH'], ordered=False)
+        raw_type = pd.Categorical(tevents[0],
+                                  categories=['RAW', 'FP', 'MISS', 'SWITCH', 'MATCH'],
+                                  ordered=False)
         series = [
             pd.Series(raw_type, name='Type'),
             pd.Series(tevents[1], dtype=object, name='OId'),
             pd.Series(tevents[2], dtype=object, name='HId'),
-            pd.Series(tevents[3], dtype=float, name='D')
+            pd.Series(tevents[3], dtype=float, name='D'),
+            pd.Series(tevents[4], dtype=object, name='GtClass'),
+            pd.Series(tevents[5], dtype=object, name='DetClass'),
         ]
-        
-        idx = pd.MultiIndex.from_tuples(indices, names=['FrameId','Event'])
+
+        idx = pd.MultiIndex.from_tuples(indices, names=['FrameId', 'Event'])
         df = pd.concat(series, axis=1)
         df.index = idx
         return df
-    
-
 
     @staticmethod
-    def merge_event_dataframes(dfs, update_frame_indices=True, update_oids=True, update_hids=True, return_mappings=False):
+    def merge_event_dataframes(dfs,
+                               update_frame_indices=True,
+                               update_oids=True,
+                               update_hids=True,
+                               return_mappings=False):
         """Merge dataframes.
         
         Params
@@ -321,30 +454,32 @@ class MOTAccumulator(object):
 
             copy = df.copy()
             infos = {}
-            
+
             # Update index
             if update_frame_indices:
-                next_frame_id = max(r.index.get_level_values(0).max()+1, r.index.get_level_values(0).unique().shape[0])
+                next_frame_id = max(
+                    r.index.get_level_values(0).max() + 1,
+                    r.index.get_level_values(0).unique().shape[0])
                 if np.isnan(next_frame_id):
                     next_frame_id = 0
-                copy.index = copy.index.map(lambda x: (x[0]+next_frame_id, x[1]))
+                copy.index = copy.index.map(lambda x: (x[0] + next_frame_id, x[1]))
                 infos['frame_offset'] = next_frame_id
 
             # Update object / hypothesis ids
-            if update_oids:                
+            if update_oids:
                 oid_map = dict([oid, str(next(new_oid))] for oid in copy['OId'].dropna().unique())
                 copy['OId'] = copy['OId'].map(lambda x: oid_map[x], na_action='ignore')
                 infos['oid_map'] = oid_map
-            
+
             if update_hids:
                 hid_map = dict([hid, str(next(new_hid))] for hid in copy['HId'].dropna().unique())
                 copy['HId'] = copy['HId'].map(lambda x: hid_map[x], na_action='ignore')
                 infos['hid_map'] = hid_map
-            
+
             r = r.append(copy)
             mapping_infos.append(infos)
 
         if return_mappings:
             return r, mapping_infos
-        else:            
+        else:
             return r

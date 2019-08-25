@@ -13,9 +13,9 @@ import numpy as np
 import inspect
 import itertools
 
+
 class MetricsHost:
     """Keeps track of metrics and intra metric dependencies."""
-
     def __init__(self):
         self.metrics = OrderedDict()
 
@@ -47,35 +47,29 @@ class MetricsHost:
         formatter: Format object, optional
             An optional default formatter when rendering metric results as string. I.e to
             render the result `0.35` as `35%` one would pass `{:.2%}.format`
-        """        
+        """
 
         assert not fnc is None, 'No function given for metric {}'.format(name)
 
         if deps is None:
             deps = []
-        elif deps is 'auto':            
-            deps = inspect.getargspec(fnc).args[1:] # assumes dataframe as first argument
+        elif deps is 'auto':
+            deps = inspect.getargspec(fnc).args[1:]  # assumes dataframe as first argument
 
         if name is None:
-            name = fnc.__name__ # Relies on meaningful function names, i.e don't use for lambdas
+            name = fnc.__name__  # Relies on meaningful function names, i.e don't use for lambdas
 
         if helpstr is None:
             helpstr = inspect.getdoc(fnc) if inspect.getdoc(fnc) else 'No description.'
             helpstr = ' '.join(helpstr.split())
-            
-        self.metrics[name] = {
-            'name' : name,
-            'fnc' : fnc,
-            'deps' : deps,
-            'help' : helpstr,
-            'formatter' : formatter
-        }
+
+        self.metrics[name] = {'name': name, 'fnc': fnc, 'deps': deps, 'help': helpstr, 'formatter': formatter}
 
     @property
     def names(self):
         """Returns the name identifiers of all registered metrics."""
         return [v['name'] for v in self.metrics.values()]
-    
+
     @property
     def formatters(self):
         """Returns the formatters for all metrics that have associated formatters."""
@@ -121,8 +115,8 @@ class MetricsHost:
         name : string, optional
             When returning a pandas.DataFrame this is the index of the row containing
             the computed metric values.
-        """ 
-        
+        """
+
         if isinstance(df, MOTAccumulator):
             df = df.events
 
@@ -131,25 +125,27 @@ class MetricsHost:
         elif isinstance(metrics, str):
             metrics = [metrics]
 
-        class DfMap : pass
+        class DfMap:
+            pass
+
         df_map = DfMap()
-        df_map.full = df     
+        df_map.full = df
         df_map.raw = df[df.Type == 'RAW']
         df_map.noraw = df[df.Type != 'RAW']
 
         cache = {}
         for mname in metrics:
-            cache[mname] = self._compute(df_map, mname, cache, parent='summarize')            
+            cache[mname] = self._compute(df_map, mname, cache, parent='summarize')
 
         if name is None:
-            name = 0 
+            name = 0
 
         if return_cached:
             data = cache
         else:
             data = OrderedDict([(k, cache[k]) for k in metrics])
-            
-        return pd.DataFrame(data, index=[name]) if return_dataframe else data     
+
+        return pd.DataFrame(data, index=[name]) if return_dataframe else data
 
     def compute_many(self, dfs, metrics=None, names=None, generate_overall=False):
         """Compute metrics on multiple dataframe / accumulators.
@@ -193,7 +189,7 @@ class MetricsHost:
 
     def _compute(self, df_map, name, cache, parent=None):
         """Compute metric and resolve dependencies."""
-        assert name in self.metrics, 'Cannot find metric {} required by {}.'.format(name, parent)        
+        assert name in self.metrics, 'Cannot find metric {} required by {}.'.format(name, parent)
 
         minfo = self.metrics[name]
         vals = []
@@ -204,70 +200,87 @@ class MetricsHost:
             vals.append(v)
         return minfo['fnc'](df_map, *vals)
 
+
 def num_frames(df):
     """Total number of frames."""
     return df.full.index.get_level_values(0).unique().shape[0]
+
 
 def obj_frequencies(df):
     """Total number of occurrences of individual objects over all frames."""
     return df.noraw.OId.value_counts()
 
+
 def pred_frequencies(df):
     """Total number of occurrences of individual predictions over all frames."""
     return df.noraw.HId.value_counts()
+
 
 def num_unique_objects(df, obj_frequencies):
     """Total number of unique object ids encountered."""
     return len(obj_frequencies)
 
+
 def num_matches(df):
     """Total number matches."""
     return df.noraw.Type.isin(['MATCH']).sum()
+
 
 def num_switches(df):
     """Total number of track switches."""
     return df.noraw.Type.isin(['SWITCH']).sum()
 
+
 def num_false_positives(df):
     """Total number of false positives (false-alarms)."""
     return df.noraw.Type.isin(['FP']).sum()
+
 
 def num_misses(df):
     """Total number of misses."""
     return df.noraw.Type.isin(['MISS']).sum()
 
+
 def num_detections(df, num_matches, num_switches):
     """Total number of detected objects including matches and switches."""
     return num_matches + num_switches
+
 
 def num_objects(df, obj_frequencies):
     """Total number of unique object appearances over all frames."""
     return obj_frequencies.sum()
 
+
 def num_predictions(df, pred_frequencies):
     """Total number of unique prediction appearances over all frames."""
     return pred_frequencies.sum()
+
 
 def num_predictions(df):
     """Total number of unique prediction appearances over all frames."""
     return df.noraw.HId.count()
 
+
 def track_ratios(df, obj_frequencies):
-    """Ratio of assigned to total appearance count per unique object id."""   
+    """Ratio of assigned to total appearance count per unique object id."""
     tracked = df.noraw[df.noraw.Type != 'MISS']['OId'].value_counts()
     return tracked.div(obj_frequencies).fillna(0.)
+
 
 def mostly_tracked(df, track_ratios):
     """Number of objects tracked for at least 80 percent of lifespan."""
     return track_ratios[track_ratios >= 0.8].count()
 
+
 def partially_tracked(df, track_ratios):
     """Number of objects tracked between 20 and 80 percent of lifespan."""
     return track_ratios[(track_ratios >= 0.2) & (track_ratios < 0.8)].count()
 
+
 def mostly_lost(df, track_ratios):
     """Number of objects tracked less than 20 percent of lifespan."""
     return track_ratios[track_ratios < 0.2].count()
+
 
 def num_fragmentations(df, obj_frequencies):
     """Total number of switches from tracked to not tracked."""
@@ -285,104 +298,143 @@ def num_fragmentations(df, obj_frequencies):
         fra += diffs[diffs == 1].count()
     return fra
 
+
 def motp(df, num_detections):
     """Multiple object tracker precision."""
     return df.noraw['D'].sum() / num_detections
+
 
 def mota(df, num_misses, num_switches, num_false_positives, num_objects):
     """Multiple object tracker accuracy."""
     return 1. - (num_misses + num_switches + num_false_positives) / num_objects
 
+
 def precision(df, num_detections, num_false_positives):
     """Number of detected objects over sum of detected and false positives."""
     return num_detections / (num_false_positives + num_detections)
 
+
 def recall(df, num_detections, num_objects):
     """Number of detections over number of objects."""
     return num_detections / num_objects
+
 
 def id_global_assignment(df):
     """ID measures: Global min-cost assignment for ID measures."""
 
     oids = df.full['OId'].dropna().unique()
     hids = df.full['HId'].dropna().unique()
-    hids_idx = dict((h,i) for i,h in enumerate(hids))
+    hids_idx = dict((h, i) for i, h in enumerate(hids))
 
-    hcs = [len(df.raw[(df.raw.HId==h)].groupby(level=0)) for h in hids]
-    ocs = [len(df.raw[(df.raw.OId==o)].groupby(level=0)) for o in oids]
+    hcs = [len(df.raw[(df.raw.HId == h)].groupby(level=0)) for h in hids]
+    ocs = [len(df.raw[(df.raw.OId == o)].groupby(level=0)) for o in oids]
 
     no = oids.shape[0]
-    nh = hids.shape[0]   
+    nh = hids.shape[0]
 
-    df = df.raw.reset_index()    
-    df = df.set_index(['OId','HId']) 
-    df = df.sort_index(level=[0,1])
+    df = df.raw.reset_index()
+    df = df.set_index(['OId', 'HId'])
+    df = df.sort_index(level=[0, 1])
 
-    fpmatrix = np.full((no+nh, no+nh), 0.)
-    fnmatrix = np.full((no+nh, no+nh), 0.)
+    fpmatrix = np.full((no + nh, no + nh), 0.)
+    fnmatrix = np.full((no + nh, no + nh), 0.)
     fpmatrix[no:, :nh] = np.nan
-    fnmatrix[:no, nh:] = np.nan 
+    fnmatrix[:no, nh:] = np.nan
 
     for r, oc in enumerate(ocs):
         fnmatrix[r, :nh] = oc
-        fnmatrix[r,nh+r] = oc
+        fnmatrix[r, nh + r] = oc
 
     for c, hc in enumerate(hcs):
         fpmatrix[:no, c] = hc
-        fpmatrix[c+no,c] = hc
+        fpmatrix[c + no, c] = hc
 
     for r, o in enumerate(oids):
         df_o = df.loc[o, 'D'].dropna()
-        for h, ex in df_o.groupby(level=0).count().iteritems():            
+        for h, ex in df_o.groupby(level=0).count().iteritems():
             c = hids_idx[h]
 
-            fpmatrix[r,c] -= ex
-            fnmatrix[r,c] -= ex
+            fpmatrix[r, c] -= ex
+            fnmatrix[r, c] -= ex
 
-    costs = fpmatrix + fnmatrix    
+    costs = fpmatrix + fnmatrix
     rids, cids = linear_sum_assignment(costs)
 
     return {
-        'fpmatrix' : fpmatrix,
-        'fnmatrix' : fnmatrix,
-        'rids' : rids,
-        'cids' : cids,
-        'costs' : costs,
-        'min_cost' : costs[rids, cids].sum()
+        'fpmatrix': fpmatrix,
+        'fnmatrix': fnmatrix,
+        'rids': rids,
+        'cids': cids,
+        'costs': costs,
+        'min_cost': costs[rids, cids].sum()
     }
+
 
 def idfp(df, id_global_assignment):
     """ID measures: Number of false positive matches after global min-cost matching."""
     rids, cids = id_global_assignment['rids'], id_global_assignment['cids']
     return id_global_assignment['fpmatrix'][rids, cids].sum()
 
+
 def idfn(df, id_global_assignment):
     """ID measures: Number of false negatives matches after global min-cost matching."""
     rids, cids = id_global_assignment['rids'], id_global_assignment['cids']
     return id_global_assignment['fnmatrix'][rids, cids].sum()
 
+
 def idtp(df, id_global_assignment, num_objects, idfn):
     """ID measures: Number of true positives matches after global min-cost matching."""
     return num_objects - idfn
+
 
 def idp(df, idtp, idfp):
     """ID measures: global min-cost precision."""
     return idtp / (idtp + idfp)
 
+
 def idr(df, idtp, idfn):
     """ID measures: global min-cost recall."""
     return idtp / (idtp + idfn)
 
+
 def idf1(df, idtp, num_objects, num_predictions):
     """ID measures: global min-cost F1 score."""
     return 2 * idtp / (num_objects + num_predictions)
+
+
+def gt_has_class_of_interest_indices(df):
+    indexes = df.noraw.Type.isin(['MATCH'])
+    return indexes & ~df.noraw.GtClass.isin([0, 5])
+
+
+def det_has_class_of_interest_indices(df):
+    indexes = df.noraw.Type.isin(['MATCH'])
+    return indexes & ~df.noraw.DetClass.isin([0, 5])
+
+
+def class_recall(df):
+    """Total number of class matches for matched objects"""
+    # indexes = df.noraw.Type.isin(['MATCH'])
+    # has_class_of_interest_indexes = not df.noraw.GtClass[indexes].isin([0, 5])
+    indices_of_gt_has_class_of_interest = gt_has_class_of_interest_indices(df)
+    return (df.noraw.GtClass[indices_of_gt_has_class_of_interest] == df.noraw.
+            DetClass[indices_of_gt_has_class_of_interest]).sum() / indices_of_gt_has_class_of_interest.sum()
+
+
+def class_fp(df):
+    """Total number of class false positives for matched objects"""
+    indices_of_gt_has_class_of_interest = gt_has_class_of_interest_indices(df)
+    indices_of_det_has_class_of_interest = det_has_class_of_interest_indices(df)
+    fp_indexes = indices_of_det_has_class_of_interest & ~indices_of_gt_has_class_of_interest
+    return fp_indexes.sum()
+
 
 def create():
     """Creates a MetricsHost and populates it with default metrics."""
     m = MetricsHost()
 
     m.register(num_frames, formatter='{:d}'.format)
-    m.register(obj_frequencies, formatter='{:d}'.format)    
+    m.register(obj_frequencies, formatter='{:d}'.format)
     m.register(pred_frequencies, formatter='{:d}'.format)
     m.register(num_matches, formatter='{:d}'.format)
     m.register(num_switches, formatter='{:d}'.format)
@@ -401,7 +453,6 @@ def create():
     m.register(mota, formatter='{:.1%}'.format)
     m.register(precision, formatter='{:.1%}'.format)
     m.register(recall, formatter='{:.1%}'.format)
-    
     m.register(id_global_assignment)
     m.register(idfp)
     m.register(idfn)
@@ -409,25 +460,15 @@ def create():
     m.register(idp, formatter='{:.1%}'.format)
     m.register(idr, formatter='{:.1%}'.format)
     m.register(idf1, formatter='{:.1%}'.format)
-
+    m.register(class_recall)
+    m.register(class_fp)
 
     return m
 
+
 motchallenge_metrics = [
-    'idf1',
-    'idp',
-    'idr',
-    'recall', 
-    'precision', 
-    'num_unique_objects', 
-    'mostly_tracked', 
-    'partially_tracked', 
-    'mostly_lost', 
-    'num_false_positives', 
-    'num_misses',
-    'num_switches',
-    'num_fragmentations',
-    'mota',
-    'motp'
+    'idf1', 'idp', 'idr', 'recall', 'precision', 'num_unique_objects', 'mostly_tracked', 'partially_tracked',
+    'mostly_lost', 'num_false_positives', 'num_misses', 'num_switches', 'num_fragmentations', 'mota', 'motp',
+    'class_recall', 'class_fp'
 ]
 """A list of all metrics from MOTChallenge."""
